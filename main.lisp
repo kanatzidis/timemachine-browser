@@ -1,73 +1,156 @@
 (load "tokenizer.lisp")
+
+; This can be modified to be a utility function for soft links
 (defun find-latest ()
-  (let* ((path (reverse (tokens (ls-item "Latest") #'constituent 0)))
+  (let* ((path (reverse (tokens (ls-path "Latest") #'constituent 0)))
          (latest (pop path)))
     latest))
-(defun concat (x y)
-  (concatenate 'string x y))
-(defun make-path (lst)
-    (reduce #'concat lst))
-(defun ls (&optional pathtoget hidden)
-  (format t "path: ~A~%" pathtoget)
-  (let* ((lspath (if (eq t hidden)
-                   pathtoget
-                   (append cwd (list pathtoget))))
-         (path (if (eq t hidden)
-                 lspath
-                 (make-path lspath))))
-    (let ((run (run-program
-      "sudo" (list "ls" "-l" path)
-      :search t
-      :output :stream
-      :input t
-      :wait nil)))
-      (let ((str (process-output run)))
-        str))))
-    ;; This is what happens when you "double click" on a file or folder in the browser.
-(defun ls-item (&optional path hidden)
-  (let ((str (ls path hidden)) (item nil))
-    (do ((line (read-line str nil 'eof)
-               (read-line str nil 'eof)))
-         ((eql line 'eof) item)
-         (format t "~A~%" hidden)
-         (if (or
-               (equal "total" (subseq line 0 5))
-               (member "->" (tokens line #'constituent 0) :test #'equal))
-           (setf item (concatenate 'string line (list #\Return) (build-dir str))) ; Directory
-           (let ((line-items (tokens line #'constituent 0)))
-             (if (member "dialout" line-items :test #'equal)
-               (setf item (prep-dl line-items)) ; File
-               (setf item (get-linkdir line-items)))))) ; Link
-    (close str)
-    item))
-(defun build-dir (str)
-  (do ((line (read-line str nil 'eof)
-             (read-line str nil 'eof))
-       (dir "" (concatenate 'string dir (list #\Newline) line)))
-    ((eql line 'eof) dir)))
-(defun get-linkdir (tokens)
-  (format t "getting~%")
-  (ls-item (concatenate 'string
-                        tmfolder "dir_" (car (subseq tokens 1))) t))
-(defun prep-dl (f)
-  (format t "This does nothing"))
-(defun listdir (&optional str)
-  (format t "~A~%" (ls-item str)))
-(defun cd (path)
-  (setf cwd (append cwd (list path)))
-  cwd)
-(defparameter drivepath "/media/kanatzidis/Elements/")
+
+(defparameter drivepath "/media/kanatzidis/Elements")
 (defparameter tmfolder
   (concatenate 'string drivepath
-               ".HFS+\ Private\ Directory\ Data" (list #\Return) "/"))
-(defparameter backupfolder "Backups.backupdb/Gregori’s\ MacBook\ Pro/")
-(defparameter cwd (list drivepath backupfolder))
-(defun setup ()
-  (setf cwd (append cwd (list (find-latest)))))
+               "/.HFS+\ Private\ Directory\ Data" (list #\Return) "/"))
+(defparameter backupfolder
+  (concatenate 'string drivepath "/Backups.backupdb/Gregori’s\ MacBook\ Pro/"))
+(defparameter cwd nil)
+(defparameter known nil)
 
-cwd is a virtual path referring to where a file/dir would be if tm wasn't stupid.
-truepath is the folder to call ls from, is set when cd into hidden dir.
-All calls to ls and cd should break down the path and determine hidden vs true.
-  After the true path, each successive component should be get-linkdir'd from the previous.
-  Then ls returns the final get-linkdir.
-Each path previously visited will be added to a structure with its full path and its type.
+(defun main ()
+  (setf cwd nil)
+  (cd (find-latest))
+  (do ((input (read-line) (read-line)))
+    ((equal input "exit"))
+    (format t "~%~A> " (concat cwd))
+    (let ((cmd (tokens input #'constituent 0)))
+      (if (or (equal (car cmd) "ls")
+              (equal (car cmd) "cd"))
+        (apply (read-from-string (car cmd))
+               (list (format nil "~{~A~^ ~}" (cdr cmd))))
+        (format t "~% Error: You must use ls or cd with one argument.~%")))))
+
+(defstruct dir
+  type
+  location
+  from
+  name)
+
+; Takes a string representing a path.
+(defun cd (path)
+  (let ((path-components (tokens path #'slash 0))
+        (newpath cwd))
+    (dolist (comp path-components)
+      (if (equal comp "..")
+        (progn
+        (pop cwd)
+        (pop newpath))
+        (push comp newpath)))
+    (format t "~A~%" (ch-dir newpath))))
+
+(defun ls (path)
+  (let ((old cwd))
+    (cd path)
+    (setf cwd old)))
+
+; Takes a list representing the virtual path.
+; Changes the cwd and returns the result of ls.
+(defun ch-dir (path)
+  (let ((tols (pathify path)))
+    (if (eq (car tols) nil)
+      (format t "Error: path '~A' could not be found.~%" (cadr tols))
+      (progn
+        (ls-path)))))
+
+; Takes a virtual path and returns a list of form:
+; (exists virtualpath full_list_of_virtual_paths)
+(defun pathify (path)
+  (let ((newcwd nil)
+        (lst (reverse path))
+        (vpath (concat path)))
+    (do ((comp (pop lst) (pop lst)))
+      ((eq comp nil) (list t vpath newcwd))
+      (if (stringp comp)
+        (let ((dir (get-path comp (car newcwd))))
+          (if dir
+            (progn
+              (push dir cwd)
+              (push dir newcwd))
+            (return (list nil vpath))))
+        (push comp newcwd)))))
+
+; Takes a string an optionally a dir struct
+; Returns a dir struct representing the string.
+(defun get-path (pathstring &optional from)
+  (if (eq from nil)
+    (setf from (car cwd))
+    (if (dir-p from)
+      (setf from (dir-location from))))
+  (let* ((structs (get-structs pathstring))
+         (struct (car (member from structs :test #'equal :key #'dir-from))))
+    (if struct
+      struct
+      (let ((unknown (new-dir pathstring from)))
+        (if unknown
+          (progn
+            (push unknown known)
+            unknown)
+          nil)))))
+
+; Takes a directory pathname and checks to see
+; if we already know about it. If so, return it,
+; if not, nil.
+(defun get-structs (path)
+  (let ((structs nil))
+    (dolist (dir known)
+      (if (equal (dir-location dir) path)
+        (push dir structs)))
+    structs))
+
+; Creates a new dir struct from a string and its parent dir struct
+(defun new-dir (path from)
+  (let* ((res (ls-path path))
+         (tokenlst (tokens (subseq res 0 (position #\Newline res))
+                           #'constituent 0)))
+    (if (member "total" tokenlst :test #'equal)
+      (make-dir :type 'real :from from :location path :name path)
+      (if (or (member "dialout" tokenlst :test #'equal)
+              (member "No" tokenlst :test #'equal))
+        nil
+        (make-dir :type 'virtual :from from :name path
+                  :location
+                  (concatenate 'string "dir_"
+                               (car (subseq
+                                      (tokens res #'constituent 0) 1))))))))
+
+; Takes a list of strings and dirs and returns the real path.
+(defun concat (lst)
+  (let ((real-path ""))
+    (dolist (obj lst)
+      (cond ((stringp obj) (setf real-path
+                                 (concatenate 'string obj "/" real-path)))
+            ((dir-p obj) (progn
+                           (setf real-path
+                                 (concatenate 'string
+                                        (dir-location obj) "/" real-path))
+                          (if (eq (dir-type obj) 'virtual)
+                            (return-from concat
+                                         (concatenate 'string tmfolder real-path)))))
+            ((not (or (stringp obj)(dir-p obj))) (format t "Something went wrong: ~A~%" obj))))
+    (concatenate 'string backupfolder real-path)))
+
+; Takes a string and returns the raw ls result.
+(defun ls-path (&optional path)
+  (let ((cwdpath (if path (concat (cons path cwd))
+                   (concat cwd))))
+    (let ((tmp (subseq cwdpath (- (length cwdpath) 1) (length cwdpath))))
+      (if (equal tmp "/")
+        (setf cwdpath (subseq cwdpath 0 (- (length cwdpath) 1)))))
+    (let ((str (process-output (run-program
+          "sudo" (list "ls" "-l" cwdpath)
+          :search t
+          :output :stream
+          :input t
+          :wait nil))))
+      (do ((line (read-line str nil 'eof)
+                 (read-line str nil 'eof))
+           (ret "" (concatenate 'string ret line (list #\Newline))))
+        ((eq line 'eof) (progn (close str) ret))))))

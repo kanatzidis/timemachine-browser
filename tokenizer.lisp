@@ -13,3 +13,6 @@
 (defun constituent (c)
   (and (graphic-char-p c)
        (not (char= c #\ ))))
+
+(defun slash (c)
+  (not (char= c #\/)))
