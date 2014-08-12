@@ -2,8 +2,8 @@
 
 ; This can be modified to be a utility function for soft links
 (defun find-latest ()
-  (let* ((path (reverse (tokens (ls-path "Latest") #'constituent 0)))
-         (latest (pop path)))
+  (let* ((path (tokens (ls-path "Latest") #'constituent 0))
+         (latest (car (last path))))
     latest))
 
 (defparameter drivepath "/media/kanatzidis/Elements")
@@ -18,15 +18,17 @@
 (defun main ()
   (setf cwd nil)
   (cd (find-latest))
+  (format t "~%~A> " (concat cwd))
   (do ((input (read-line) (read-line)))
     ((equal input "exit"))
-    (format t "~%~A> " (concat cwd))
     (let ((cmd (tokens input #'constituent 0)))
       (if (or (equal (car cmd) "ls")
-              (equal (car cmd) "cd"))
+              (equal (car cmd) "cd")
+              (equal (car cmd) "cp"))
         (apply (read-from-string (car cmd))
                (list (format nil "~{~A~^ ~}" (cdr cmd))))
-        (format t "~% Error: You must use ls or cd with one argument.~%")))))
+        (format t "~% Error: You must use ls or cd with one argument.~%")))
+    (format t "~%~A> " (concat cwd))))
 
 (defstruct dir
   type
@@ -41,10 +43,28 @@
     (dolist (comp path-components)
       (if (equal comp "..")
         (progn
-        (pop cwd)
-        (pop newpath))
+          (pop cwd)
+          (pop newpath))
         (push comp newpath)))
     (format t "~A~%" (ch-dir newpath))))
+
+(defun cp (path)
+  (let ((cwdpath (concat (cons path cwd))))
+    (let ((tmp (subseq cwdpath (- (length cwdpath) 1) (length cwdpath))))
+      (format t "path: ~A~%"
+              (subseq cwdpath (- (length cwdpath) 5) (length cwdpath)))
+        (if (equal tmp "/")
+          (setf cwdpath (subseq cwdpath 0 (- (length cwdpath) 1))))
+      (let ((str (process-output (run-program
+            "sudo" (list "cp" cwdpath "/home/kanatzidis/")
+            :search t
+            :output :stream
+            :input t
+            :wait nil))))
+        (do ((line (read-line str nil 'eof)
+                   (read-line str nil 'eof))
+             (ret "" (concatenate 'string ret line (list #\Newline))))
+          ((eq line 'eof) (progn (close str) (format t "~A~%" ret))))))))
 
 (defun ls (path)
   (let ((old cwd))
@@ -143,7 +163,7 @@
                    (concat cwd))))
     (let ((tmp (subseq cwdpath (- (length cwdpath) 1) (length cwdpath))))
       (if (equal tmp "/")
-        (setf cwdpath (subseq cwdpath 0 (- (length cwdpath) 1)))))
+        (setf cwdpath (subseq cwdpath 0 (- (length cwdpath) 1))))
     (let ((str (process-output (run-program
           "sudo" (list "ls" "-l" cwdpath)
           :search t
@@ -153,4 +173,4 @@
       (do ((line (read-line str nil 'eof)
                  (read-line str nil 'eof))
            (ret "" (concatenate 'string ret line (list #\Newline))))
-        ((eq line 'eof) (progn (close str) ret))))))
+        ((eq line 'eof) (progn (close str) ret)))))))
