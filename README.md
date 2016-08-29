@@ -2,7 +2,7 @@
 
 #### Note:
 
-I found out "too late" that this problem has already been solved in Ubuntu, and I'd bet it has in other linux distros as well. I went ahead with the project though as a way of familiarizing myself with lisp. At best, your distro has a built-in function for it, at worst you can use this instead. If you use ubuntu, see [this page](http://manpages.ubuntu.com/manpages/saucy/man1/tmfs.1.html).
+I found out "too late" that this problem has already been solved using a FUSE [called tmfs](http://manpages.ubuntu.com/manpages/saucy/man1/tmfs.1.html). Unfortunately, it dosen't seem to work correctly for folder references that are inside other folder references. In any case, I created my own FUSE to solve this problem, which obsoletes this repo. You can find it here: https://github.com/kanatzidis/Wells
 
 ### Setup
 
